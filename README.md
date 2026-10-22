@@ -211,3 +211,131 @@ npm run test:api
 | **System Admin** | `admin@driveeasy.com` | `password123` |
 
 *(Quick-fill buttons are also available on the Login Page for convenience).*
+
+---
+
+## 🎓 Complete Viva Preparation & Code Explanation Guide
+
+Use this section to confidently explain every aspect of the project during your practical viva.
+
+---
+
+### 1. High-Level Architecture & Request Lifecycle
+
+```
+[Browser / React Client]
+       │
+       ▼  (HTTP Request with Bearer Token in Authorization header)
+[Express Backend - server.js]
+       │
+       ├─► 1. CORS & Body Parsers (express.json())
+       ├─► 2. requestLogger Middleware ([METHOD] [PATH] [TIMESTAMP])
+       ├─► 3. Public Routes (/api/v1/auth/login, GET /api/v1/vehicles)
+       │
+       ▼
+[authGuard Middleware] ─── (Missing / Invalid Token? ──► Returns 401 JSON)
+       │
+       ▼  (Attaches decoded customer info to req.customer)
+[Protected Controllers]
+       ├─► bookingController.createBooking (Checks vehicle.available === true)
+       ├─► bookingController.getMyBookings (Applies .populate())
+       └─► bookingController.updateBookingStatus (PATCH status)
+       │
+       ▼
+[MongoDB via Mongoose Models] (Customer, Vehicle, Booking)
+       │
+       ▼  (If an error occurs)
+[errorHandler Middleware] (Catches error, returns structured JSON without raw stack)
+```
+
+---
+
+### 2. Task-by-Task Viva Explanation
+
+#### 🔹 Task 1: React Component Architecture
+- **File:** `frontend/src/components/VehicleCard.jsx`
+- **What to explain:**
+  - The component is a pure, reusable functional component receiving 4 primary props: `model`, `type`, `pricePerDay`, and `available`.
+  - It uses a **clean ternary expression** (`!available ? <Badge> : <Button>`) to dynamically swap between displaying a `"Not Available"` red badge and an active `"Book Now"` button.
+  - When `"Book Now"` is clicked, an optional callback prop `onBookNow` transmits the selected vehicle object back up to the parent `FleetPage`.
+
+#### 🔹 Task 2: React Routing & State Management
+- **Files:** `frontend/src/App.jsx`, `frontend/src/context/AuthContext.jsx`, `frontend/src/components/ProtectedRoute.jsx`
+- **What to explain:**
+  - **Routing:** Configured with React Router DOM (`<BrowserRouter>`, `<Routes>`, `<Route>`).
+  - **Lazy Loading:** `AdminPanel` is loaded dynamically using `const AdminPanel = React.lazy(() => import('./pages/AdminPanel'))` wrapped in `<Suspense fallback={<Spinner />}>`. This splits the admin bundle into a separate JavaScript chunk, reducing initial page load time.
+  - **AuthContext:** Provides centralized authentication state (`customer`, `token`, `login`, `logout`) via React Context API (`createContext` + `useContext`). Stores token and customer profile in both component state and `localStorage` for session persistence.
+  - **ProtectedRoute:** Higher-order route wrapper that verifies `isAuthenticated`. If unauthenticated, it returns `<Navigate to="/" replace />` to redirect the user to the Login page.
+  - **Form State in FleetPage:** Uses React's `useState` hook to manage `selectedVehicle`, `pickupDate`, and `returnDate`. When a user selects a vehicle or changes dates, the UI dynamically re-renders to show the selected vehicle's name and calculated estimated rental cost.
+
+#### 🔹 Task 3: Express REST API & Middleware
+- **Files:** `backend/server.js`, `backend/middleware/requestLogger.js`, `backend/middleware/authGuard.js`, `backend/middleware/errorHandler.js`
+- **What to explain:**
+  - **`requestLogger`:** Global middleware applied before routes:
+    ```javascript
+    console.log(`[${req.method}] [${req.originalUrl}] [${new Date().toISOString()}]`);
+    ```
+  - **`authGuard`:** Protects private endpoints. Reads `req.headers.authorization`. If the `Bearer <token>` is missing or verification with `jwt.verify(token, JWT_SECRET)` fails, it halts the request lifecycle immediately with `401 Unauthorized`. Upon success, it attaches the decoded customer payload to `req.customer` and calls `next()`.
+  - **Global `errorHandler`:** Placed as the very last middleware with 4 arguments `(err, req, res, next)`. It intercepts errors (such as Mongoose `ValidationError`, `CastError`, and duplicate key errors) and returns a uniform JSON response (`{ success: false, message, details }`), strictly avoiding raw call stacks that expose server internals.
+  - **REST Endpoints:** Exposes standard endpoints conforming to REST principles:
+    - `POST /api/v1/auth/login` (Auth)
+    - `GET /api/v1/vehicles` (Public listing)
+    - `POST /api/v1/bookings` (Protected booking creation, returns 201)
+    - `GET /api/v1/bookings/my` (Protected user bookings)
+    - `PATCH /api/v1/bookings/:id/status` (Protected status patch)
+
+#### 🔹 Task 4: REST API Consumption in React
+- **Files:** `frontend/src/pages/FleetPage.jsx`, `frontend/src/services/api.js`
+- **What to explain:**
+  - Uses `useEffect(() => { fetchVehicles(); }, [])` to trigger the HTTP `GET` request on component mount.
+  - Tracks 3 distinct state variables:
+    1. `vehicles`: The array of vehicle objects received from the API.
+    2. `loading`: Boolean state controlling the loading spinner while the request is in flight.
+    3. `error`: Error state capturing friendly error messages if the server is unreachable or fails.
+  - **Client-Side Filter:** The user can filter cars by type (`All`, `Hatchback`, `Sedan`, `SUV`). Rather than making a redundant network request on every click, the component preserves the master `vehicles` array in state and computes the derived list using JavaScript's `.filter()` method:
+    ```javascript
+    const filteredVehicles = vehicles.filter((v) =>
+      selectedTypeFilter === 'All' ? true : v.type === selectedTypeFilter
+    );
+    ```
+
+#### 🔹 Task 5: MongoDB + Mongoose Schemas & Double-Booking Prevention
+- **Files:** `backend/models/Customer.js`, `backend/models/Vehicle.js`, `backend/models/Booking.js`, `backend/controllers/bookingController.js`
+- **What to explain:**
+  - **Schemas & Constraints:**
+    - `Customer`: Unique index on `email` and `licenseNumber`; required fields.
+    - `Vehicle`: Required `model`, `type` (enum), `pricePerDay` (min: 0), and boolean `available` (default: true).
+    - `Booking`: References `Customer` (`customerId`) and `Vehicle` (`vehicleId`), required dates, and a strict `status` enum (`reserved`, `ongoing`, `completed`, `cancelled`).
+  - **Double-Booking Prevention Algorithm:**
+    In `bookingController.createBooking`:
+    1. Look up the requested vehicle using `Vehicle.findById(vehicleId)`.
+    2. Check `if (vehicle.available !== true)`: if already booked, immediately reject with `400 Bad Request` and message: `"Vehicle is currently not available for booking."`
+    3. If available, create the `Booking` document.
+    4. Immediately update `vehicle.available = false` and save to MongoDB.
+  - **Mongoose Populate:**
+    In `getMyBookings`:
+    ```javascript
+    await Booking.find({ customerId })
+      .populate('customerId', 'name email')
+      .populate('vehicleId', 'model type');
+    ```
+    This automatically joins and replaces the referenced ObjectIDs with the actual Customer name/email and Vehicle model/type in a single response.
+
+---
+
+### 3. Top 5 Frequently Asked Viva Questions & Answers
+
+1. **Q: Why do we use `React.lazy()` and `<Suspense>` for the Admin Panel?**  
+   *A:* It implements code-splitting. Instead of bundling the Admin Panel code into the main client bundle downloaded by every customer, it loads the Admin Panel chunk on demand only when an authorized administrator navigates to `/admin`.
+
+2. **Q: How does `authGuard` verify that a customer is authorized?**  
+   *A:* It inspects the `Authorization` HTTP header for a `Bearer <token>` format. It decrypts and verifies the JWT signature using `jwt.verify(token, secret)`. If valid, it attaches `req.customer` to the request object and calls `next()`; otherwise, it returns `401 Unauthorized`.
+
+3. **Q: How does your code solve the double-booking problem?**  
+   *A:* In `POST /api/v1/bookings`, the backend performs an explicit validation check on `vehicle.available === true`. If the vehicle is already booked, the request is rejected with HTTP 400. Once reserved, the backend marks `vehicle.available = false` in MongoDB.
+
+4. **Q: What is the difference between client-side filtering and server-side filtering? Why use client-side here?**  
+   *A:* Server-side filtering sends a new HTTP query (e.g. `?type=SUV`) on every filter click. Client-side filtering fetches the fleet once on mount into state and applies `.filter()` in memory. This provides an instantaneous UI response and avoids unnecessary network overhead.
+
+5. **Q: What is the purpose of Mongoose `.populate()`?**  
+   *A:* In MongoDB, references are stored as `ObjectId`s. `.populate()` performs a referenced document lookup (similar to a SQL JOIN) to embed specific fields (e.g. customer's name and vehicle's model) directly into the query result without requiring multiple manual database queries.
